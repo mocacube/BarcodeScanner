@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import Vision
 
 // MARK: - Delegates
 
@@ -53,9 +54,9 @@ open class BarcodeScannerViewController: UIViewController {
   public var shouldSimulateFlash = true
     
   /// `AVCaptureMetadataOutput` metadata object types.
-  public var metadata = AVMetadataObject.ObjectType.barcodeScannerMetadata {
+    public var symbologies = VNDetectBarcodesRequest.supportedSymbologies {
     didSet {
-      cameraViewController.metadata = metadata
+      cameraViewController.symbologies = symbologies
     }
   }
 
@@ -103,7 +104,6 @@ open class BarcodeScannerViewController: UIViewController {
     messageView.translatesAutoresizingMaskIntoConstraints = false
     collapsedConstraints.activate()
 
-    cameraViewController.metadata = metadata
     cameraViewController.delegate = self
     add(childViewController: cameraViewController)
 
@@ -322,28 +322,19 @@ extension BarcodeScannerViewController: CameraViewControllerDelegate {
   }
 
   func cameraViewController(_ controller: CameraViewController,
-                            didOutput metadataObjects: [AVMetadataObject]) {
+                              didReceive barcodes: [VNBarcodeObservation]) {
     guard !locked && isVisible else { return }
-    guard !metadataObjects.isEmpty else { return }
+    guard !barcodes.isEmpty else { return }
 
-    guard
-      let metadataObj = metadataObjects[0] as? AVMetadataMachineReadableCodeObject,
-      var code = metadataObj.stringValue,
-      metadata.contains(metadataObj.type)
+    let barcode = barcodes[0]
+    guard var code = barcode.payloadStringValue, symbologies.contains(barcode.symbology)
       else { return }
 
     if isOneTimeSearch {
       locked = true
     }
 
-    var rawType = metadataObj.type.rawValue
-
-    // UPC-A is an EAN-13 barcode with a zero prefix.
-    // See: https://stackoverflow.com/questions/22767584/ios7-barcode-scanner-api-adds-a-zero-to-upca-barcode-format
-    if metadataObj.type == AVMetadataObject.ObjectType.ean13 && code.hasPrefix("0") {
-      code = String(code.dropFirst())
-      rawType = AVMetadataObject.ObjectType.upca.rawValue
-    }
+    var rawType = barcode.symbology.rawValue
 
     codeDelegate?.scanner(self, didCaptureCode: code, type: rawType)
     animateFlash(whenProcessing: isOneTimeSearch)

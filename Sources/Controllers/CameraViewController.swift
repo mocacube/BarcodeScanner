@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import Vision
 
 /// Delegate to handle camera setup and video capturing.
 protocol CameraViewControllerDelegate: class {
@@ -9,7 +10,7 @@ protocol CameraViewControllerDelegate: class {
   func cameraViewControllerDidTapSettingsButton(_ controller: CameraViewController)
   func cameraViewController(
     _ controller: CameraViewController,
-    didOutput metadataObjects: [AVMetadataObject]
+    didReceive barcodes: [VNBarcodeObservation]
   )
 }
 
@@ -25,8 +26,12 @@ public final class CameraViewController: UIViewController {
       cameraButton.isHidden = showsCameraButton
     }
   }
-  /// `AVCaptureMetadataOutput` metadata object types.
-  var metadata = [AVMetadataObject.ObjectType]()
+  
+    var symbologies = [VNBarcodeSymbology]() {
+        didSet {
+            detectBarcodeRequest.symbologies = symbologies
+        }
+    }
 
   // MARK: - UI proterties
 
@@ -78,6 +83,17 @@ public final class CameraViewController: UIViewController {
   private var backCameraDevice: AVCaptureDevice? {
     return AVCaptureDevice.default(for: .video)
   }
+    
+  // MARK: - Vision
+    
+    private lazy var detectBarcodeRequest = VNDetectBarcodesRequest { request, error in
+      if let error = error {
+        self.delegate?.cameraViewController(self, didReceiveError: error)
+        return
+      } else {
+        self.processClassification(request)
+      }
+    }
 
   // MARK: - Initialization
 
@@ -255,10 +271,10 @@ public final class CameraViewController: UIViewController {
       return
     }
 
-    let output = AVCaptureMetadataOutput()
+    let output = AVCaptureVideoDataOutput()
+    output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)]
+    output.setSampleBufferDelegate(self, queue: DispatchQueue.global(qos: DispatchQoS.QoSClass.default))
     captureSession.addOutput(output)
-    output.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
-    output.metadataObjectTypes = metadata
     videoPreviewLayer?.session = captureSession
 
     view.setNeedsLayout()
@@ -427,14 +443,40 @@ private extension CameraViewController {
     button.isHidden = !showsCameraButton
     return button
   }
+    
+//MARK: - Vision
+    
+    func processClassification(_ request: VNRequest) {
+        guard let barcodes = request.results else { return }
+        DispatchQueue.main.async {
+            if self.captureSession.isRunning {
+                var validBarcodes = [VNBarcodeObservation]()
+                for barcode in barcodes {
+                    guard let potentialCode = barcode as? VNBarcodeObservation,
+                        potentialCode.confidence > 0.9
+                    else { return }
+                    
+                    validBarcodes.append(potentialCode)
+                }
+                self.delegate?.cameraViewController(self, didReceive: validBarcodes)
+            }
+        }
+    }
 }
 
-// MARK: - AVCaptureMetadataOutputObjectsDelegate
-
-extension CameraViewController: AVCaptureMetadataOutputObjectsDelegate {
-  public func metadataOutput(_ output: AVCaptureMetadataOutput,
-                             didOutput metadataObjects: [AVMetadataObject],
-                             from connection: AVCaptureConnection) {
-    delegate?.cameraViewController(self, didOutput: metadataObjects)
-  }
+// MARK: - AVCaptureDelegation
+extension CameraViewController: AVCaptureVideoDataOutputSampleBufferDelegate {
+    public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        let imageRequestHandler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: .right)
+        
+        do {
+            try imageRequestHandler.perform([detectBarcodeRequest])
+        } catch {
+            print(error)
+        }
+    }
 }
