@@ -254,6 +254,7 @@ public final class CameraViewController: UIViewController {
       captureDevice = device
       // Swap capture device inputs
       captureSession.beginConfiguration()
+      captureSession.sessionPreset = .hd1280x720
       if let currentInput = captureSession.inputs.first as? AVCaptureDeviceInput {
         captureSession.removeInput(currentInput)
       }
